@@ -9,7 +9,7 @@ using ResoniteModLoader;
 namespace CustomToolScaling;
 //More info on creating mods can be found https://github.com/resonite-modding-group/ResoniteModLoader/wiki/Creating-Mods
 public class CustomToolScaling : ResoniteMod {
-	internal const string VERSION_CONSTANT = "1.0.0"; //Changing the version here updates it in all locations needed
+	internal const string VERSION_CONSTANT = "1.0.1"; //Changing the version here updates it in all locations needed
 	public override string Name => "CustomToolScaling";
 	public override string Author => "Noble";
 	public override string Version => VERSION_CONSTANT;
@@ -108,7 +108,7 @@ public class CustomToolScaling : ResoniteMod {
 
 					if (customScaleNumber > 0f) {
 						if (setDirectly) {
-							finalScale = customScaleNumber;
+							finalScale = customScaleNumber * handler.LocalUserRoot.GlobalScale;
 						} else {
 							finalScale = vanillaScale * customScaleNumber;
 						}
