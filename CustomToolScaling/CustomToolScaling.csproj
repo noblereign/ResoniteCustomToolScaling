@@ -22,8 +22,8 @@
 		  <PrivateAssets>all</PrivateAssets>
 		  <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
 		</PackageReference>
-		<PackageReference Include="ResoniteModLoader" Version="5.0.1" />
-		<PackageReference Include="Lib.Harmony" Version="2.4.2" />
+		<PackageReference Include="ResoniteModLoader" Version="5.0.2" />
+		<PackageReference Include="Lib.Harmony" Version="2.4.3" />
     <Reference Include="FrooxEngine" Publicize="True">
       <HintPath>$(ResonitePath)FrooxEngine.dll</HintPath>
       <Private>False</Private>
