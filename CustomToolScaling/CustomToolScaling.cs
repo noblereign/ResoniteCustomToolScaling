@@ -1,7 +1,6 @@
 using System.Reflection;
 using System.Reflection.Emit;
 using FrooxEngine;
-using Elements.Core;
 using Renderite.Shared;
 using HarmonyLib;
 using ResoniteModLoader;
@@ -9,7 +8,7 @@ using ResoniteModLoader;
 namespace CustomToolScaling;
 //More info on creating mods can be found https://github.com/resonite-modding-group/ResoniteModLoader/wiki/Creating-Mods
 public class CustomToolScaling : ResoniteMod {
-	internal const string VERSION_CONSTANT = "1.0.2"; //Changing the version here updates it in all locations needed
+	internal const string VERSION_CONSTANT = "1.1.0"; //Changing the version here updates it in all locations needed
 	public override string Name => "CustomToolScaling";
 	public override string Author => "Noble";
 	public override string Version => VERSION_CONSTANT;
@@ -25,68 +24,12 @@ public class CustomToolScaling : ResoniteMod {
 		Config!.Save(true);
 
 		Harmony harmony = new("dog.glacier.CustomToolScaling");
-		harmony.PatchAll();
+		harmony.PatchAll(Assembly.GetExecutingAssembly());
 	}
 
-	public static float EvaluateVanillaScale(InteractionHandler handler, ITool tool) { // kinda gotta redo almost the entire thing sadly
-		HandPoser handPoser = handler.Slot.ActiveUserRoot.GetRegisteredComponent((HandPoser p) => p.Enabled && p.Slot.IsActive && p.Side.Value == (Chirality)handler.Side && p.PoseSource.Target != null);
-		Slot handRoot = ((handPoser == null) ? handler.Slot.ActiveUserRoot.GetHandSlot(handler.Side) : handPoser.CurrentHandRoot);
-		Slot slot = tool.Slot;
-		List<GripPoseReference> references = Pool.BorrowList<GripPoseReference>();
-		InteractionHandler.GetGripPoseReferences(tool, slot, references, (GripPoseReference g) => g.HandSide.Value == (Chirality)handler.Side);
-		if (references.Count == 0) {
-			return 1f; // this might differ from vanilla behavior? not sure what this is actually meant to return...
-		}
-		Slot hand = handler.Slot.ActiveUserRoot.GetHandSlot(handler.Side);
-		Slot holder = tool.Slot.Parent;
-		Slot space = holder.Parent;
-		float minDist = float.MaxValue;
-		GripPoseReference minReference = null!;
-		for (int i = 0; i < references.Count; i++) {
-			GripPoseReference r = references[i];
-			float dist = MathX.Distance(r.Slot.GlobalPosition, hand.GlobalPosition);
-			if (dist < minDist) {
-				minDist = dist;
-				minReference = r;
-			}
-		}
-		Pool.Return(ref references);
-		GripPoseReference reference = minReference!;
-		float3 referencePos;
-		floatQ referenceRot;
-		float referenceScale;
-		float targetScale = handRoot.LocalScaleToGlobal(1f); // fallback
-		floatQ targetRot;
-		float3 targetPos;
-		if (handPoser != null) {
-			float3 referenceForward = reference.LocalForwardDirection;
-			float3 referenceUp = MathX.Cross(in referenceForward, reference.LocalRightDirection);
-			referencePos = slot.SpacePointToLocal(reference.LocalFingerStartPosition, reference.Slot);
-			referenceRot = slot.SpaceRotationToLocal(floatQ.LookRotation(in referenceForward, in referenceUp), reference.Slot);
-			referenceScale = reference.Slot.LocalScaleToGlobal(reference.LocalScale);
-			float3 fingerStart = GripPoseReference.ComputeFingerStart(handPoser);
-			float3 localFingerStart = handRoot.GlobalPointToLocal(in fingerStart);
-			float localScale = localFingerStart.Magnitude;
-			float3 localForward = localFingerStart.Normalized;
-			float3 localUp = MathX.Cross(in localForward, handPoser.HandRight.Value);
-			targetPos = fingerStart;
-			targetRot = handRoot.LocalRotationToGlobal(floatQ.LookRotation(in localForward, in localUp));
-			targetScale = handRoot.LocalScaleToGlobal(localScale);
-		} else {
-			referencePos = slot.SpacePointToLocal(reference.Slot.LocalPosition, reference.Slot.Parent);
-			referenceRot = slot.SpaceRotationToLocal(reference.Slot.LocalRotation, reference.Slot.Parent);
-			referenceScale = reference.Slot.LocalScaleToGlobal(1f);
-			targetPos = handRoot.GlobalPosition;
-			targetRot = handRoot.GlobalRotation;
-			targetScale = handRoot.LocalScaleToGlobal(1f);
-		}
-		return targetScale;
-	}
-
-	[HarmonyPatch]
+	[HarmonyPatch(typeof(InteractionHandler), "AlignTool")]
 	class AlignTool_DynamicScale_Transpiler {
-		public static float DetermineTargetScale(InteractionHandler handler, ITool tool) {
-			float vanillaScale = EvaluateVanillaScale(handler, tool);
+		public static float DetermineTargetScale(InteractionHandler handler, ITool tool, float vanillaScale) {
 			float finalScale = vanillaScale;
 
 			if (Config!.GetValue(Enabled)) {
@@ -119,17 +62,6 @@ public class CustomToolScaling : ResoniteMod {
 			return finalScale;
 		}
 
-		static MethodBase TargetMethod() {
-			// Find the hidden async state machine
-			var stateMachineType = typeof(InteractionHandler)
-				.GetNestedTypes(BindingFlags.NonPublic | BindingFlags.Instance)
-				.FirstOrDefault(t => t.Name.Contains("<AlignTool>d__"));
-
-			if (stateMachineType == null) return null!;
-
-			return AccessTools.Method(stateMachineType, "MoveNext");
-		}
-
 		static IEnumerable<CodeInstruction> Transpiler(IEnumerable<CodeInstruction> instructions) {
 			var codes = new List<CodeInstruction>(instructions);
 
@@ -138,42 +70,23 @@ public class CustomToolScaling : ResoniteMod {
 				nameof(DetermineTargetScale)
 			);
 
-			var stateMachineType = typeof(InteractionHandler)
-				.GetNestedTypes(BindingFlags.NonPublic | BindingFlags.Instance)
-				.FirstOrDefault(t => t.Name.Contains("<AlignTool>d__"));
-
-			FieldInfo toolField = AccessTools.Field(stateMachineType, "tool");
-
-			// Grab the hidden field holding the InteractionHandler instance!
-			FieldInfo instanceField = AccessTools.Field(stateMachineType, "<>4__this");
-
-			for (int i = 0; i < codes.Count; i++) {
-				if (codes[i].opcode == OpCodes.Div) {
-					// We are replacing the instruction at [i-2] that originally pushed the float.
-
-					// 1. Load the state machine instance onto the stack
-					codes[i - 2].opcode = OpCodes.Ldarg_0;
-					codes[i - 2].operand = null;
-
-					// 2. Prepare our new instructions to fetch the fields and call the method
-					var loadInstance = new CodeInstruction(OpCodes.Ldfld, instanceField); // Gets InteractionHandler
-					var loadStateMachineAgain = new CodeInstruction(OpCodes.Ldarg_0);     // Needs state machine again
-					var loadTool = new CodeInstruction(OpCodes.Ldfld, toolField);         // Gets ITool
-					var callCustomMath = new CodeInstruction(OpCodes.Call, customScaleMethod); // Calls our function
-
-					// 3. Shove them all into the execution line right after [i-2]
-					codes.InsertRange(i - 1, new[] {
-					loadInstance,
-					loadStateMachineAgain,
-					loadTool,
-					callCustomMath
-				});
-
-					break; // Surgery complete
+			for (int i = 2; i < codes.Count; i++) {
+				// Matches:
+				// IL_0325: ldloc.s 15 (targetScale / vanillaScale)
+				// IL_0327: ldloc.s 20 (currentScale)
+				// IL_0329: div
+				if (codes[i].opcode == OpCodes.Div && codes[i - 2].IsLdloc()) {
+					codes.InsertRange(i - 2, new[] {
+						new CodeInstruction(OpCodes.Ldarg_0), // InteractionHandler (this)
+						new CodeInstruction(OpCodes.Ldarg_1)  // ITool (tool)
+					});
+					// codes[i] is now the original ldloc.s 15 (vanillaScale), so insert the call right after it
+					codes.Insert(i + 1, new CodeInstruction(OpCodes.Call, customScaleMethod));
+					break;
 				}
 			}
 
-			return codes.AsEnumerable();
+			return codes;
 		}
 	}
 }
